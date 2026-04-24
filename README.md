@@ -72,6 +72,24 @@ The runner provides helpers to scenario files:
 The helper names are intentionally simple. Backend-specific complexity belongs
 in backend scripts, not in every scenario.
 
+## Pipeline
+
+Each run walks this pipeline; any step is skippable via a flag.
+
+| Step | Driven by | Flag to skip |
+| --- | --- | --- |
+| stage | `LAB_STAGE_SOURCES` globs copied to `LAB_STAGE_DIR` | `--no-stage` |
+| reset | `Revert-TestVM.ps1` via `LAB_STAGE_DIR` | `--no-reset` |
+| push | `scp LAB_PUSH_FILES` to `LAB_REMOTE_PUSH_DIR` | `--no-push` |
+| post-push | `LAB_POST_PUSH_CMD` on the VM | `--no-push` |
+| `pre_hook` | scenario | — |
+| `run_scenario` | scenario | — |
+| `verify` | scenario | — |
+| `post_hook` | scenario | — |
+
+`--verify-only` implies all `--no-*` and skips the scenario body plus the
+pre/post hooks.
+
 ## Status
 
 This is the initial extraction from the Samba AD DC appliance lab. It is usable
