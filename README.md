@@ -92,8 +92,21 @@ pre/post hooks.
 
 ## Status
 
-This is the initial extraction from the Samba AD DC appliance lab. It is usable
-as a starting point, but the topology model is intentionally still light. The
-next step is to add a neutral YAML topology file and map it into backend
-operations such as create network, create VM, attach NIC, snapshot, revert,
-guest exec, and copy to guest.
+One real consumer today: the [`samba-addc-appliance`](https://github.com/hooman/samba-addc-appliance)
+repo uses this runner end to end (stage, revert, push, post-push command,
+scenario pre/run/verify/post hooks, log capture). The pipeline surface is
+stable; no breaking changes planned before a second appliance arrives.
+
+One hypervisor backend today (Hyper-V over SSH). Adding libvirt or VMware
+is mostly a matter of replacing the revert helper and the command that
+the runner invokes on the host; the scenario surface should not need to
+change.
+
+Intentionally not shipped yet:
+
+- A neutral YAML topology file. It is tempting to design one now, but
+  lab-kit has one consumer - the topology would end up describing the
+  Samba lab. Waiting for a second consumer before generalizing.
+- A guest-exec abstraction. `ssh_vm` is enough for current scenarios.
+- A snapshot-create helper. Test cycles work off a pre-existing
+  `golden-image` checkpoint; scenarios only need revert.
