@@ -29,8 +29,8 @@ LAB_NAME="${LAB_NAME:-lab}"
 LAB_RESULTS_DIR="${LAB_RESULTS_DIR:-test-results}"
 LAB_STAGE_DIR="${LAB_STAGE_DIR:-}"
 LAB_STAGE_SOURCES="${LAB_STAGE_SOURCES:-}"
-LAB_HV_HOST="${LAB_HV_HOST:-server}"
-LAB_HV_USER="${LAB_HV_USER:-nmadmin}"
+LAB_HV_HOST="${LAB_HV_HOST:-}"
+LAB_HV_USER="${LAB_HV_USER:-}"
 LAB_VM_NAME="${LAB_VM_NAME:-}"
 LAB_VM_IP="${LAB_VM_IP:-}"
 LAB_VM_USER="${LAB_VM_USER:-}"
@@ -38,6 +38,10 @@ LAB_GOLDEN_CHECKPOINT="${LAB_GOLDEN_CHECKPOINT:-golden-image}"
 LAB_REMOTE_PUSH_DIR="${LAB_REMOTE_PUSH_DIR:-/tmp}"
 LAB_PUSH_FILES="${LAB_PUSH_FILES:-}"
 LAB_POST_PUSH_CMD="${LAB_POST_PUSH_CMD:-}"
+# Host-side path where LAB_STAGE_DIR is visible on the hypervisor host.
+# For Hyper-V over SMB, this is typically D:\ISO\lab-scripts matching the
+# Mac-side /Volumes/ISO/lab-scripts. Override for other backends / mappings.
+LAB_HOST_STAGE_DIR="${LAB_HOST_STAGE_DIR:-D:\\ISO\\lab-scripts}"
 
 usage() {
     cat <<USAGE
@@ -55,7 +59,7 @@ Required environment for SSH VM scenarios:
 
 Optional environment:
   LAB_RESULTS_DIR, LAB_VM_NAME, LAB_GOLDEN_CHECKPOINT
-  LAB_STAGE_DIR, LAB_STAGE_SOURCES
+  LAB_STAGE_DIR, LAB_STAGE_SOURCES, LAB_HOST_STAGE_DIR
   LAB_PUSH_FILES, LAB_REMOTE_PUSH_DIR, LAB_POST_PUSH_CMD
 USAGE
 }
@@ -84,16 +88,22 @@ done
 [[ -f "$SCENARIO_FILE" ]] || { echo "Scenario not found: $SCENARIO_FILE" >&2; exit 2; }
 
 ssh_host() {
+    : "${LAB_HV_HOST:?LAB_HV_HOST required}"
+    : "${LAB_HV_USER:?LAB_HV_USER required}"
     ssh "${LAB_HV_USER}@${LAB_HV_HOST}" "$@"
 }
 
 ssh_vm() {
+    : "${LAB_HV_HOST:?LAB_HV_HOST required}"
+    : "${LAB_HV_USER:?LAB_HV_USER required}"
     : "${LAB_VM_IP:?LAB_VM_IP required}"
     : "${LAB_VM_USER:?LAB_VM_USER required}"
     ssh -J "${LAB_HV_USER}@${LAB_HV_HOST}" "${LAB_VM_USER}@${LAB_VM_IP}" "$@"
 }
 
 scp_to_vm() {
+    : "${LAB_HV_HOST:?LAB_HV_HOST required}"
+    : "${LAB_HV_USER:?LAB_HV_USER required}"
     : "${LAB_VM_IP:?LAB_VM_IP required}"
     : "${LAB_VM_USER:?LAB_VM_USER required}"
     scp -J "${LAB_HV_USER}@${LAB_HV_HOST}" "$@" "${LAB_VM_USER}@${LAB_VM_IP}:${LAB_REMOTE_PUSH_DIR}/"
@@ -153,7 +163,7 @@ fi
 if [[ $RESET -eq 1 ]]; then
     : "${LAB_VM_NAME:?LAB_VM_NAME required for reset}"
     step "revert $LAB_VM_NAME to $LAB_GOLDEN_CHECKPOINT"
-    ssh_host "pwsh -File D:\\ISO\\lab-scripts\\Revert-TestVM.ps1 -VMName '$LAB_VM_NAME' -Checkpoint '$LAB_GOLDEN_CHECKPOINT'"
+    ssh_host "pwsh -File ${LAB_HOST_STAGE_DIR}\\Revert-TestVM.ps1 -VMName '$LAB_VM_NAME' -Checkpoint '$LAB_GOLDEN_CHECKPOINT'"
 
     say "wait for ${LAB_VM_IP} SSH"
     for _ in $(seq 1 60); do

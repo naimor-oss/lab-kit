@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     Tiny wrapper around Stop-VM / Restore-VMCheckpoint / Start-VM used by
-    lab/run-scenario.sh to cycle samba-dc1 back to its 'golden-image'
-    checkpoint between test runs. Deliberately does no waiting - the caller
+    the generic scenario runner to cycle a test VM back to its golden
+    checkpoint between runs. Deliberately does no waiting - the caller
     polls SSH on the VM's IP to determine readiness.
 
 .PARAMETER VMName
