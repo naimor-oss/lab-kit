@@ -3,3 +3,8 @@
 test-results/
 *.log
 .env
+.claude/
+.codex/
+.cursor/
+.continue/
+.aider*
