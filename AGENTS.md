@@ -2,6 +2,12 @@
 
 This is the vendor-neutral brief for coding agents working in `lab-kit`.
 
+**General conventions, project narrative, and shared decisions live in
+the sibling repo [`../dev-commons/`](../dev-commons/).** Read at least
+[`../dev-commons/CONTEXT.md`](../dev-commons/CONTEXT.md) and
+[`../dev-commons/STYLE.md`](../dev-commons/STYLE.md) before substantive
+work here. This file covers what's specific to `lab-kit`.
+
 ## Project Purpose
 
 `lab-kit` is reusable orchestration for appliance build/test labs. It should
