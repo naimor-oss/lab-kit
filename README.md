@@ -13,6 +13,16 @@ The first backend is Hyper-V because that is where the Samba AD DC appliance
 lab started. The design keeps hypervisor-specific operations behind small
 scripts so libvirt/QEMU, VMware, or other backends can be added later.
 
+## Where do I start?
+
+| If you want to … | Read |
+| --- | --- |
+| Understand the **runner pipeline and scenario contract** | [`docs/architecture.md`](docs/architecture.md) |
+| Add a **new hypervisor backend** | [`docs/hypervisors.md`](docs/hypervisors.md) |
+| Wire **a new appliance** into the runner | [`examples/samba-addc.env`](examples/samba-addc.env) as the reference env file |
+| Look up **shared coding/docs conventions** | [`../dev-commons/STYLE.md`](../dev-commons/STYLE.md) |
+| Understand the **sibling-repo split** | [`../dev-commons/REPO-SPLIT.md`](../dev-commons/REPO-SPLIT.md) |
+
 ## Repository Map
 
 | Path | Purpose |
