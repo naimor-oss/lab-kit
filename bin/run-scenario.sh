@@ -130,7 +130,13 @@ log="$LAB_RESULTS_DIR/${scenario_name}-${ts}.log"
 exec > >(tee -a "$log") 2>&1
 
 rc=2
-trap 'say "EXIT rc=$rc log=$log"' EXIT
+# Explicit `exit $rc` in the trap so the outer shell rc reflects the
+# scenario rc. Without it, the `exec > >(tee -a "$log")` redirect
+# above leaves the wait-for-tee as bash's "last command," which
+# returns 0 — masking ${VAR:?} aborts and other early failures as
+# silent successes. Caught by lab-kit's tests/smoke-runner.sh on
+# 2026-05-06.
+trap 'say "EXIT rc=$rc log=$log"; exit $rc' EXIT
 
 step "lab=$LAB_NAME scenario=$scenario_name log=$log"
 
