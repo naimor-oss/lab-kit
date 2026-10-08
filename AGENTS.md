@@ -32,8 +32,20 @@ log collection without depending on any one appliance.
 - Keep private agent folders such as `.claude/`, `.codex/`, `.cursor/`,
   `.continue/`, and `.aider*` untracked.
 
+## Workstation portability
+
+`lib/lab-host.sh` is the only place that knows about the operator's
+workstation: WSL2 on Windows 11 (supported), macOS (legacy) or plain Linux.
+It provides the ISO share path (`lab_iso_dir`), the NoCloud seed ISO
+builder (`lab_make_seed_iso`, label `CIDATA`), checksums and install hints.
+Appliance lab scripts and `lab-router` source it from the sibling checkout;
+never call `hdiutil`, `shasum` or `/Volumes/...` directly in a lab script.
+Setup: `../dev-commons/WSL2-LAB-SETUP.md`.
+
 ## Checks
 
 ```bash
-bash -n bin/run-scenario.sh scenarios/common/*.sh
+bash -n bin/run-scenario.sh lib/*.sh scenarios/common/*.sh
+bash tests/lab-host.sh
+bash tests/smoke-runner.sh
 ```

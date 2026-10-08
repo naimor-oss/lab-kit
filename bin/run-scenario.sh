@@ -27,7 +27,11 @@ fi
 
 LAB_NAME="${LAB_NAME:-lab}"
 LAB_RESULTS_DIR="${LAB_RESULTS_DIR:-test-results}"
-LAB_STAGE_DIR="${LAB_STAGE_DIR:-}"
+# shellcheck disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/lab-host.sh"
+# Workstation view of the Hyper-V host's D:\ISO\lab-scripts (lab-host.sh:
+# /mnt/d/ISO on WSL2, /Volumes/ISO on macOS, or $LAB_ISO_DIR).
+LAB_STAGE_DIR="${LAB_STAGE_DIR:-$(lab_iso_dir)/lab-scripts}"
 LAB_STAGE_SOURCES="${LAB_STAGE_SOURCES:-}"
 LAB_HV_HOST="${LAB_HV_HOST:-}"
 LAB_HV_USER="${LAB_HV_USER:-}"
@@ -39,8 +43,8 @@ LAB_REMOTE_PUSH_DIR="${LAB_REMOTE_PUSH_DIR:-/tmp}"
 LAB_PUSH_FILES="${LAB_PUSH_FILES:-}"
 LAB_POST_PUSH_CMD="${LAB_POST_PUSH_CMD:-}"
 # Host-side path where LAB_STAGE_DIR is visible on the hypervisor host.
-# For Hyper-V over SMB, this is typically D:\ISO\lab-scripts matching the
-# Mac-side /Volumes/ISO/lab-scripts. Override for other backends / mappings.
+# For Hyper-V this is D:\ISO\lab-scripts, matching the workstation-side
+# LAB_STAGE_DIR above. Override for other backends / mappings.
 LAB_HOST_STAGE_DIR="${LAB_HOST_STAGE_DIR:-D:\\ISO\\lab-scripts}"
 
 usage() {
