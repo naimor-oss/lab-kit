@@ -102,7 +102,7 @@ pre/post hooks.
 
 ## Status
 
-One real consumer today: the [`samba-addc-appliance`](https://github.com/hooman/samba-addc-appliance)
+One real consumer today: the [`samba-addc-appliance`](https://github.com/naimor-oss/samba-addc-appliance)
 repo uses this runner end to end (stage, revert, push, post-push command,
 scenario pre/run/verify/post hooks, log capture). The pipeline surface is
 stable; no breaking changes planned before a second appliance arrives.
