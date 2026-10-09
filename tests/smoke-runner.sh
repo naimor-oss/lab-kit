@@ -36,6 +36,7 @@ FIRST_FAIL=""
 run_runner() {
     LAST_OUT=$(env -i \
         HOME="$HOME" PATH="$PATH" \
+        LAB_RESULTS_DIR="${SCRIPT_DIR}/../test-results" \
         bash "$RUNNER" "$@" 2>&1)
     LAST_RC=$?
 }

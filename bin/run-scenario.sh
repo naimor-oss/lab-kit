@@ -102,7 +102,10 @@ ssh_vm() {
     : "${LAB_HV_USER:?LAB_HV_USER required}"
     : "${LAB_VM_IP:?LAB_VM_IP required}"
     : "${LAB_VM_USER:?LAB_VM_USER required}"
-    ssh -J "${LAB_HV_USER}@${LAB_HV_HOST}" "${LAB_VM_USER}@${LAB_VM_IP}" "$@"
+    ssh -o LogLevel=ERROR \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -J "${LAB_HV_USER}@${LAB_HV_HOST}" \
+        "${LAB_VM_USER}@${LAB_VM_IP}" "$@"
 }
 
 scp_to_vm() {
@@ -110,7 +113,10 @@ scp_to_vm() {
     : "${LAB_HV_USER:?LAB_HV_USER required}"
     : "${LAB_VM_IP:?LAB_VM_IP required}"
     : "${LAB_VM_USER:?LAB_VM_USER required}"
-    scp -J "${LAB_HV_USER}@${LAB_HV_HOST}" "$@" "${LAB_VM_USER}@${LAB_VM_IP}:${LAB_REMOTE_PUSH_DIR}/"
+    scp -o LogLevel=ERROR \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -J "${LAB_HV_USER}@${LAB_HV_HOST}" \
+        "$@" "${LAB_VM_USER}@${LAB_VM_IP}:${LAB_REMOTE_PUSH_DIR}/"
 }
 
 say()  { echo "--- [$(date -u +%H:%M:%S)] $*"; }
@@ -176,13 +182,18 @@ if [[ $RESET -eq 1 ]]; then
     ssh_host "pwsh -File ${LAB_HOST_STAGE_DIR}\\Revert-TestVM.ps1 -VMName '$LAB_VM_NAME' -Checkpoint '$LAB_GOLDEN_CHECKPOINT'"
 
     say "wait for ${LAB_VM_IP} SSH"
+    ssh_up=0
     for _ in $(seq 1 60); do
-        if ssh -o ConnectTimeout=3 -o BatchMode=yes \
+        if ssh -o ConnectTimeout=3 -o BatchMode=yes -o LogLevel=ERROR \
+               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                -J "${LAB_HV_USER}@${LAB_HV_HOST}" "${LAB_VM_USER}@${LAB_VM_IP}" true 2>/dev/null; then
+            ssh_up=1
             break
         fi
         sleep 2
     done
+    [[ $ssh_up -eq 1 ]] \
+        || { say "SSH never came up at ${LAB_VM_IP}"; exit 1; }
 else
     say "skipping VM revert"
 fi
