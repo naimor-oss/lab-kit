@@ -18,6 +18,7 @@ scripts so libvirt/QEMU, VMware, or other backends can be added later.
 | If you want to … | Read |
 | --- | --- |
 | Understand the **runner pipeline and scenario contract** | [`docs/architecture.md`](docs/architecture.md) |
+| Get a **disposable test VM** in seconds, or build a **sealed base disk** | [`docs/disposable-vms.md`](docs/disposable-vms.md) (`bin/lab-vm`) |
 | Add a **new hypervisor backend** | [`docs/hypervisors.md`](docs/hypervisors.md) |
 | Wire **a new appliance** into the runner | [`examples/samba-addc.env`](examples/samba-addc.env) as the reference env file |
 | Look up **shared coding/docs conventions** | [`../dev-commons/STYLE.md`](../dev-commons/STYLE.md) |
@@ -28,6 +29,7 @@ scripts so libvirt/QEMU, VMware, or other backends can be added later.
 | Path | Purpose |
 | --- | --- |
 | `bin/run-scenario.sh` | Generic scenario runner. |
+| `bin/lab-vm` | Disposable test VMs and sealed base disks (`docs/disposable-vms.md`). |
 | `hypervisors/hyperv/` | Hyper-V helper scripts. |
 | `scenarios/common/` | Reusable scenario fragments and smoke checks. |
 | `examples/` | Example topology and environment files. |
@@ -118,5 +120,6 @@ Intentionally not shipped yet:
   lab-kit has one consumer - the topology would end up describing the
   Samba lab. Waiting for a second consumer before generalizing.
 - A guest-exec abstraction. `ssh_vm` is enough for current scenarios.
-- A snapshot-create helper. Test cycles work off a pre-existing
-  `golden-image` checkpoint; scenarios only need revert.
+- A snapshot-create helper. Scenario runs revert a `golden-image`
+  checkpoint; for new work, prefer sealed base disks and throwaway VMs
+  (`bin/lab-vm`, `docs/disposable-vms.md`), which need no checkpoints.

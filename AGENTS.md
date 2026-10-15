@@ -48,4 +48,6 @@ Setup: `../dev-commons/WSL2-LAB-SETUP.md`.
 bash -n bin/run-scenario.sh lib/*.sh scenarios/common/*.sh
 bash tests/lab-host.sh
 bash tests/smoke-runner.sh
+bash tests/lab-vm.sh
+shellcheck bin/lab-vm tests/*.sh
 ```
