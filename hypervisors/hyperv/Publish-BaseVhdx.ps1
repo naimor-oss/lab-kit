@@ -35,7 +35,8 @@ $drives = @($vm | Get-VMHardDiskDrive)
 if ($drives.Count -ne 1) { throw "VM '$VMName' has $($drives.Count) disks; expected one" }
 
 New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
-$tmp = "$Destination.partial"
+# Convert-VHD wants a VHD extension on the output.
+$tmp = [IO.Path]::ChangeExtension($Destination, ".partial.vhdx")
 Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
 # Convert-VHD reads through the differencing chain, so the result stands alone.
 Convert-VHD -Path $drives[0].Path -DestinationPath $tmp -VHDType Dynamic

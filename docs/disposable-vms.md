@@ -56,6 +56,15 @@ Measured on a Dev Drive: 0.09 s to copy a 1.2 GB VHDX on the Windows side.
 The same copy from WSL2 (through `/mnt/d`) takes 20 s, which is why disks are
 always copied on the host.
 
+## Measured (Windows 11 client Hyper-V, Dev Drive, 2026-10-15)
+
+| Step | Time |
+| --- | --- |
+| `fetch-debian` (download, SHA512, convert) | 51 s |
+| `build-base --upgrade` (build VM to published sealed base) | about 35 s |
+| `new`, two VMs started in parallel, until both answer SSH | 24 s |
+| `register` an exported VM folder, until it answers SSH | 12 s |
+
 ## Rights: no elevation needed
 
 The scripts in `hypervisors/hyperv/` need Hyper-V rights, not
@@ -95,3 +104,11 @@ Each step prints how long it took.
 already where it should stay, for example an exported appliance build copied
 to the lab share. No copy, same VM ID. It registers one VM. To get several
 VMs from one build, publish its disk as a base and use `new`.
+
+Without elevation, registering needs the files to belong to the user who
+registers them: Hyper-V sets each disk's ACL for the VM, and only an owner
+may do that. Files that `Export-VM` wrote belong to `SYSTEM`, so
+`Register-TestVM.ps1` first replaces any file the user doesn't own with the
+user's own copy (a block clone on ReFS, a real copy elsewhere). ISO files
+aren't part of an export; a DVD drive whose media is missing is ejected,
+with a warning.

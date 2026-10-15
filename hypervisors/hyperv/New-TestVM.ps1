@@ -95,6 +95,10 @@ try {
 }
 
 if (-not $NoStart) { Start-VM -Name $Name }
-# A dynamic MAC is assigned at first start; until then it reads all zeros.
-$mac = (Get-VMNetworkAdapter -VMName $Name | Select-Object -First 1).MacAddress
+# A dynamic MAC is assigned shortly after first start; until then it reads all zeros.
+for ($i = 0; $i -lt 20; $i++) {
+    $mac = (Get-VMNetworkAdapter -VMName $Name | Select-Object -First 1).MacAddress
+    if ($NoStart -or $mac -ne '000000000000') { break }
+    Start-Sleep -Milliseconds 250
+}
 'VM {0} mac={1} disk={2} seconds={3:N1}' -f $Name, $mac, $DiskMode, ((Get-Date) - $started).TotalSeconds

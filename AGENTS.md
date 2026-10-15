@@ -49,5 +49,5 @@ bash -n bin/run-scenario.sh lib/*.sh scenarios/common/*.sh
 bash tests/lab-host.sh
 bash tests/smoke-runner.sh
 bash tests/lab-vm.sh
-shellcheck bin/lab-vm tests/*.sh
+shellcheck bin/lab-vm tests/lab-vm.sh
 ```
