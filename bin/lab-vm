@@ -27,8 +27,13 @@
 #
 # Configuration (environment; an env file can be sourced first):
 #   LAB_HYPERV       local (default: powershell.exe on this Windows host, from
-#                    WSL2) or ssh:USER@HOST (pwsh over SSH)
-#   LAB_HOST_SCRIPTS with ssh:, the host path of hypervisors/hyperv/*.ps1
+#                    WSL2) or ssh:USER@HOST (pwsh over SSH). ssh:USER@localhost
+#                    from WSL2 runs them as another Windows account on this host
+#                    (e.g. a separate admin account instead of Hyper-V rights
+#                    for the everyday one).
+#   LAB_HOST_SCRIPTS with ssh:, the host path of hypervisors/hyperv/*.ps1. For
+#                    localhost, lab-vm copies them there itself (a Windows drive
+#                    path the other account can read, e.g. D:\Lab\lab-scripts)
 #   LAB_VM_ROOT      host path for VM folders            (required)
 #   LAB_SWITCH       Hyper-V switch for the VMs           (required)
 #   LAB_BASE         default base VHDX (host path) for "new"
@@ -77,6 +82,7 @@ hv() {
             return "${PIPESTATUS[0]}" ;;
         ssh:*)
             need LAB_HOST_SCRIPTS
+            is_localhost && stage_scripts
             local q=() a
             for a in "$@"; do q+=("'${a//\'/\'\'}'"); done
             ssh "${LAB_HYPERV#ssh:}" pwsh -NoProfile -NonInteractive -Command \
@@ -86,11 +92,25 @@ hv() {
 }
 
 # Host (Windows) path of a local file; LAB_HYPERV=local only.
+is_localhost() { [[ "$LAB_HYPERV" =~ ^ssh:([^@]+@)?(localhost|127\.0\.0\.1)$ ]]; }
+
+# Host (Windows) path of a local file: WSL2 on the Hyper-V host only.
 host_path() {
-    case "$LAB_HYPERV" in
-        local) wslpath -w "$(readlink -f "$1")" ;;
-        *) die "seed ISOs over ssh: set LAB_SEED_DIR to a share and map it (not implemented)" ;;
-    esac
+    local p; p=$(readlink -f "$1")
+    if [[ "$LAB_HYPERV" == local ]]; then wslpath -w "$p"; return; fi
+    is_localhost || die "seed ISOs to a remote Hyper-V host are not implemented"
+    # Another Windows account can't see this user's \\wsl.localhost paths.
+    [[ "$p" == /mnt/[a-z]/* ]] || die "$p must be on a Windows drive for LAB_HYPERV=$LAB_HYPERV (set LAB_SEED_DIR or LAB_ISO_DIR under /mnt/<drive>)"
+    wslpath -w "$p"
+}
+
+# Copy hypervisors/hyperv/*.ps1 to LAB_HOST_SCRIPTS once per run (localhost).
+STAGED=0
+stage_scripts() {
+    (( STAGED )) && return 0
+    local dir; dir=$(wslpath -u "$LAB_HOST_SCRIPTS")
+    { mkdir -p "$dir" && cp "$PS_DIR"/*.ps1 "$dir/"; } || die "cannot copy the Hyper-V scripts to $LAB_HOST_SCRIPTS"
+    STAGED=1
 }
 
 vm_mac() {   # lower-case aa:bb:.. of the VM's first adapter

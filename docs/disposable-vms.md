@@ -75,6 +75,13 @@ close to admin-equivalent on that host: whoever controls Hyper-V can attach
 any disk to a VM. Creating switches, NAT and host vNIC addresses still needs
 elevation (`lab-router`).
 
+The other way: keep the everyday account without Hyper-V rights and run
+the scripts as a separate admin account over SSH to the same host,
+`LAB_HYPERV=ssh:<admin>@localhost` (Windows OpenSSH server, the admin's own
+key). lab-vm then copies the scripts to `LAB_HOST_SCRIPTS`, and seed ISOs
+must be on a Windows drive (`/mnt/<drive>/...`), because the other account
+can't see this user's WSL files.
+
 ## IP addresses
 
 `lab-vm` finds a VM's IP one of two ways:
