@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+# lab-vm: disposable test VMs from sealed base disks (docs/disposable-vms.md).
+#
+#   lab-vm fetch-debian [RELEASE]  newest Debian genericcloud image (default
+#                                  trixie) as a VHDX in the ISO dir; prints its
+#                                  host path. Checked against SHA512SUMS.
+#   lab-vm new NAME [-b BASE] [--packages "p1 p2"] [--upgrade] [--disk-gb N]
+#                   [--memory-mb N] [--cpus N] [--no-wait]
+#                                  create + start NAME from BASE, print its IP
+#   lab-vm rm NAME...              turn off and delete (only VMs lab-vm made)
+#   lab-vm ip NAME                 print NAME's lab IP
+#   lab-vm ssh NAME [CMD...]       ssh to NAME as LAB_VM_USER
+#   lab-vm seal NAME [--remove-user]
+#                                  generalize NAME in the guest and power it off;
+#                                  --remove-user also deletes LAB_VM_USER, so a
+#                                  base to ship carries no lab login
+#   lab-vm publish NAME OUT.vhdx   write sealed, powered-off NAME as a base
+#   lab-vm build-base -s SRC -o OUT.vhdx [--prep CMD] [--packages ...] [--upgrade]
+#                     [--disk-gb N] [--upload PATH]... [--remove-user]
+#                                  --upload copies PATH to the build VM's /tmp
+#                                  before --prep runs
+#                                  new from SRC, prep, seal, publish, remove
+#   lab-vm seed NAME [--packages ...] [--upgrade]
+#                                  only write NAME's seed ISO, print its path
+#   lab-vm register DIR [--start] [--disposable] [--switch SW]
+#                                  register a VM folder in place
+#
+# Configuration (environment; an env file can be sourced first):
+#   LAB_HYPERV       local (default: powershell.exe on this Windows host, from
+#                    WSL2) or ssh:USER@HOST (pwsh over SSH). ssh:USER@localhost
+#                    from WSL2 runs them as another Windows account on this host
+#                    (e.g. a separate admin account instead of Hyper-V rights
+#                    for the everyday one).
+#   LAB_HOST_SCRIPTS with ssh:, the host path of hypervisors/hyperv/*.ps1. For
+#                    localhost, lab-vm copies them there itself (a Windows drive
+#                    path the other account can read, e.g. D:\Lab\lab-scripts)
+#   LAB_VM_ROOT      host path for VM folders            (required)
+#   LAB_SWITCH       Hyper-V switch for the VMs           (required)
+#   LAB_BASE         default base VHDX (host path) for "new"
+#   LAB_SEED_DIR     where seed ISOs are written: a local path the host also
+#                    sees (default: $(lab_iso_dir)/seeds)
+#   LAB_ROUTER_SSH   USER@ROUTER whose dnsmasq leases give a VM's IP
+#                    (lab-router); without it, the IP Hyper-V reports (KVP,
+#                    needs hyperv-daemons in the guest)
+#   LAB_VM_USER      admin user created in each VM        (default: $USER)
+#   LAB_PUBKEY       its SSH public key                   (default: ~/.ssh/id_ed25519.pub)
+#   LAB_SSH_KEY      matching private key                 (default: LAB_PUBKEY minus .pub)
+#   LAB_DOMAIN       DNS domain for the VM's FQDN         (default: lab.test)
+#   LAB_WAIT         seconds to wait for IP and SSH       (default: 300)
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$HERE/../lib/lab-host.sh"
+PS_DIR="$HERE/../hypervisors/hyperv"
+
+LAB_HYPERV="${LAB_HYPERV:-local}"
+LAB_VM_USER="${LAB_VM_USER:-${USER:-labadmin}}"
+LAB_PUBKEY="${LAB_PUBKEY:-$HOME/.ssh/id_ed25519.pub}"
+LAB_SSH_KEY="${LAB_SSH_KEY:-${LAB_PUBKEY%.pub}}"
+LAB_DOMAIN="${LAB_DOMAIN:-lab.test}"
+LAB_WAIT="${LAB_WAIT:-300}"
+
+die() { echo "lab-vm: $*" >&2; exit 1; }
+say() { echo "-> $*" >&2; }
+need() { [[ -n "${!1:-}" ]] || die "$1 is not set (see lab-vm --help)"; }
+usage() { sed -n '2,/^set -euo/p' "$0" | sed -e '/^set -euo/d' -e 's/^# \{0,1\}//'; }
+
+# Disposable VMs: host keys change with every VM, and IPs get reused.
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no
+          -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i "$LAB_SSH_KEY")
+
+# Run hypervisors/hyperv/<script>.ps1 on the Hyper-V host with the given args.
+hv() {
+    local script="$1"; shift
+    case "$LAB_HYPERV" in
+        local)
+            command -v powershell.exe >/dev/null 2>&1 \
+                || die "LAB_HYPERV=local needs WSL2 on the Hyper-V host (no powershell.exe)"
+            powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+                -File "$(wslpath -w "$PS_DIR/$script.ps1")" "$@" | tr -d '\r'
+            return "${PIPESTATUS[0]}" ;;
+        ssh:*)
+            need LAB_HOST_SCRIPTS
+            is_localhost && stage_scripts
+            local q=() a
+            for a in "$@"; do q+=("'${a//\'/\'\'}'"); done
+            ssh "${LAB_HYPERV#ssh:}" pwsh -NoProfile -NonInteractive -Command \
+                "& '$LAB_HOST_SCRIPTS\\$script.ps1' ${q[*]}" ;;
+        *) die "LAB_HYPERV must be local or ssh:USER@HOST, not $LAB_HYPERV" ;;
+    esac
+}
+
+# Host (Windows) path of a local file; LAB_HYPERV=local only.
+is_localhost() { [[ "$LAB_HYPERV" =~ ^ssh:([^@]+@)?(localhost|127\.0\.0\.1)$ ]]; }
+
+# Host (Windows) path of a local file: WSL2 on the Hyper-V host only.
+host_path() {
+    local p; p=$(readlink -f "$1")
+    if [[ "$LAB_HYPERV" == local ]]; then wslpath -w "$p"; return; fi
+    is_localhost || die "seed ISOs to a remote Hyper-V host are not implemented"
+    # Another Windows account can't see this user's \\wsl.localhost paths.
+    [[ "$p" == /mnt/[a-z]/* ]] || die "$p must be on a Windows drive for LAB_HYPERV=$LAB_HYPERV (set LAB_SEED_DIR or LAB_ISO_DIR under /mnt/<drive>)"
+    wslpath -w "$p"
+}
+
+# Copy hypervisors/hyperv/*.ps1 to LAB_HOST_SCRIPTS once per run (localhost).
+STAGED=0
+stage_scripts() {
+    (( STAGED )) && return 0
+    local dir; dir=$(wslpath -u "$LAB_HOST_SCRIPTS")
+    { mkdir -p "$dir" && cp "$PS_DIR"/*.ps1 "$dir/"; } || die "cannot copy the Hyper-V scripts to $LAB_HOST_SCRIPTS"
+    STAGED=1
+}
+
+vm_mac() {   # lower-case aa:bb:.. of the VM's first adapter
+    hv Get-TestVMInfo -Name "$1" | sed -n 's/^mac=//p' \
+        | tr 'A-F' 'a-f' | sed 's/../&:/g; s/:$//'
+}
+
+vm_ip_once() {
+    local name="$1" mac
+    if [[ -n "${LAB_ROUTER_SSH:-}" ]]; then
+        mac=$(vm_mac "$name")
+        # dnsmasq.leases: expiry mac ip hostname client-id; newest lease wins.
+        ssh "${SSH_OPTS[@]}" "$LAB_ROUTER_SSH" cat /var/lib/misc/dnsmasq.leases 2>/dev/null \
+            | awk -v m="$mac" '$2 == m { print $1, $3 }' | sort -n | tail -n 1 | cut -d' ' -f2
+    else
+        hv Get-TestVMInfo -Name "$name" | sed -n 's/^ipv4=//p'
+    fi
+}
+
+wait_ssh() {   # wait_ssh NAME -> prints IP once ssh works
+    local name="$1" ip="" t0=$SECONDS
+    while (( SECONDS - t0 < LAB_WAIT )); do
+        ip=$(vm_ip_once "$name" || true)
+        if [[ -n "$ip" ]] && ssh "${SSH_OPTS[@]}" "$LAB_VM_USER@$ip" true 2>/dev/null; then
+            say "$name ssh ready at $ip after $((SECONDS - t0))s"
+            echo "$ip"; return 0
+        fi
+        sleep 3
+    done
+    die "$name: no ssh within ${LAB_WAIT}s (ip: ${ip:-none})"
+}
+
+# NoCloud seed for one VM: its own identity, the lab user and key, DHCP.
+make_seed() {   # make_seed NAME PACKAGES UPGRADE -> prints local ISO path
+    local name="$1" packages="$2" upgrade="$3" dir out tmp p
+    [[ -r "$LAB_PUBKEY" ]] || die "no public key at $LAB_PUBKEY (LAB_PUBKEY)"
+    dir="${LAB_SEED_DIR:-$(lab_iso_dir)/seeds}"
+    mkdir -p "$dir"
+    out="$dir/$name-seed.iso"
+    tmp=$(mktemp -d)
+    {
+        echo '#cloud-config'
+        echo "hostname: $name"
+        echo "fqdn: $name.$LAB_DOMAIN"
+        echo 'manage_etc_hosts: true'
+        echo 'users:'
+        echo "  - name: $LAB_VM_USER"
+        echo '    groups: [sudo, adm]'
+        echo '    sudo: ALL=(ALL) NOPASSWD:ALL'
+        echo '    shell: /bin/bash'
+        echo '    lock_passwd: true'
+        echo '    ssh_authorized_keys:'
+        echo "      - $(tr -d '\n' < "$LAB_PUBKEY")"
+        echo 'ssh_pwauth: false'
+        if [[ "$upgrade" == 1 ]]; then
+            echo 'package_update: true'
+            echo 'package_upgrade: true'
+        fi
+        if [[ -n "$packages" ]]; then
+            echo 'packages:'
+            for p in $packages; do echo "  - $p"; done
+        fi
+    } > "$tmp/user-data"
+    printf 'instance-id: %s-%s\nlocal-hostname: %s\n' "$name" "$(date +%s)" "$name" > "$tmp/meta-data"
+    # Match any Ethernet name: eth0 on Hyper-V Gen2, but don't depend on it.
+    printf 'version: 2\nethernets:\n  lan:\n    match:\n      name: "e*"\n    dhcp4: true\n    dhcp6: false\n' \
+        > "$tmp/network-config"
+    lab_make_seed_iso "$out" "$tmp"
+    rm -rf "$tmp"
+    echo "$out"
+}
+
+# Generalize: next boot is a first boot with new machine-id, host keys and
+# cloud-init run (and DHCP client-id, which networkd derives from machine-id).
+SEAL_SCRIPT='set -e
+cloud-init clean --logs --seed --machine-id
+rm -f /etc/ssh/ssh_host_* /etc/cloud/cloud-init.disabled
+rm -f /var/lib/systemd/network/*.lease /var/lib/dhcp/*.leases 2>/dev/null || true
+apt-get clean
+rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+journalctl --rotate >/dev/null 2>&1 && journalctl --vacuum-time=1s >/dev/null 2>&1 || true
+rm -f /root/.bash_history /home/*/.bash_history
+fstrim -av >/dev/null 2>&1 || true
+sync
+systemctl poweroff --no-block'
+
+cmd_new() {
+    local name="" base="${LAB_BASE:-}" packages="" upgrade=0 wait=1 disk_gb=0 seed ip
+    local memory_mb=2048 cpus=2
+    while (( $# )); do
+        case "$1" in
+            --memory-mb) memory_mb="$2"; shift 2 ;;
+            --cpus) cpus="$2"; shift 2 ;;
+            -b|--base) base="$2"; shift 2 ;;
+            --disk-gb) disk_gb="$2"; shift 2 ;;
+            --packages) packages="$2"; shift 2 ;;
+            --upgrade) upgrade=1; shift ;;
+            --no-wait) wait=0; shift ;;
+            -*) die "new: unknown option $1" ;;
+            *) [[ -z "$name" ]] || die "new: one NAME"; name="$1"; shift ;;
+        esac
+    done
+    [[ -n "$name" ]] || die "new: NAME missing"
+    [[ -n "$base" ]] || die "new: no base (-b or LAB_BASE)"
+    need LAB_VM_ROOT; need LAB_SWITCH
+    local t0=$SECONDS
+    seed=$(make_seed "$name" "$packages" "$upgrade")
+    hv New-TestVM -Name "$name" -BaseVhdx "$base" -VMRoot "$LAB_VM_ROOT" \
+        -SwitchName "$LAB_SWITCH" -SeedIso "$(host_path "$seed")" -DiskGB "$disk_gb" \
+        -MemoryMB "$memory_mb" -VCpu "$cpus" >&2
+    rm -f "$seed"
+    (( wait )) || return 0
+    ip=$(wait_ssh "$name")
+    say "$name ready in $((SECONDS - t0))s"
+    echo "$ip"
+}
+
+cmd_seal() {
+    local name="${1:?seal: NAME}" remove_user="${2:-}" ip t0 script="$SEAL_SCRIPT"
+    [[ -z "$remove_user" || "$remove_user" == --remove-user ]] || die "seal: unknown option $remove_user"
+    ip=$(vm_ip_once "$name"); [[ -n "$ip" ]] || die "seal: no IP for $name"
+    if [[ -n "$remove_user" ]]; then
+        # Before the poweroff line. userdel -f works while the session is open.
+        script="userdel -f -r '$LAB_VM_USER' 2>/dev/null || true
+rm -f /etc/sudoers.d/90-cloud-init-users
+$script"
+    fi
+    say "sealing $name ($ip)${remove_user:+, removing user $LAB_VM_USER}"
+    # The guest powers off at the end, so the ssh session may drop.
+    ssh "${SSH_OPTS[@]}" "$LAB_VM_USER@$ip" 'sudo sh -s' <<<"$script" || true
+    t0=$SECONDS
+    until hv Get-TestVMInfo -Name "$name" | grep -qx 'state=Off'; do
+        (( SECONDS - t0 < LAB_WAIT )) || die "seal: $name did not power off"
+        sleep 3
+    done
+    say "$name sealed and off"
+}
+
+cmd_fetch_debian() {
+    local rel="${1:-trixie}" url ver serial dir q v sums
+    lab_need_tool curl; lab_need_tool qemu-img qemu-utils
+    url="https://cloud.debian.org/images/cloud/$rel"
+    serial=$(curl -fsSL "$url/" | grep -o 'href="[0-9]\{8\}-[0-9]*/"' | sed 's/href="//; s|/"||' \
+        | sort -u | tail -n 1)
+    [[ -n "$serial" ]] || die "fetch-debian: no releases listed at $url/"
+    ver=$(curl -fsSL "$url/$serial/" | grep -o 'debian-[0-9]*-genericcloud-amd64-[0-9-]*\.qcow2' | head -n 1)
+    [[ -n "$ver" ]] || die "fetch-debian: no genericcloud-amd64 qcow2 in $url/$serial/"
+    dir="$(lab_iso_dir)"; q="$dir/$ver"; v="$dir/${ver%.qcow2}.vhdx"
+    if [[ -s "$v" ]]; then say "$v already there"; host_path "$v"; return; fi
+    say "downloading $ver"
+    local progress=-s; [[ -t 2 ]] && progress=--progress-bar
+    curl -fL "$progress" -o "$q.partial" "$url/$serial/$ver"
+    sums=$(curl -fsSL "$url/$serial/SHA512SUMS")
+    [[ "$(awk -v f="$ver" '$2 == f { print $1 }' <<<"$sums")" == "$(sha512sum "$q.partial" | cut -d' ' -f1)" ]] \
+        || { rm -f "$q.partial"; die "fetch-debian: SHA512 mismatch for $ver"; }
+    mv "$q.partial" "$q"
+    say "converting to $(basename "$v")"
+    qemu-img convert -O vhdx -o subformat=dynamic "$q" "$v.partial"
+    mv "$v.partial" "$v"; rm -f "$q"
+    host_path "$v"
+}
+
+cmd_build_base() {
+    local src="" out="" prep="" packages="" upgrade=0 disk_gb=0 remove_user="" name ip u
+    local uploads=()
+    while (( $# )); do
+        case "$1" in
+            --upload) [[ -e "$2" ]] || die "build-base: --upload $2: no such file"
+                      uploads+=("$2"); shift 2 ;;
+            --remove-user) remove_user=--remove-user; shift ;;
+            --disk-gb) disk_gb="$2"; shift 2 ;;
+            -s|--source) src="$2"; shift 2 ;;
+            -o|--out) out="$2"; shift 2 ;;
+            --prep) prep="$2"; shift 2 ;;
+            --packages) packages="$2"; shift 2 ;;
+            --upgrade) upgrade=1; shift ;;
+            *) die "build-base: unknown argument $1" ;;
+        esac
+    done
+    [[ -n "$src" && -n "$out" ]] || die "build-base: -s SRC and -o OUT.vhdx are required"
+    name="build-$(date +%Y%m%d%H%M%S)"
+    local t0=$SECONDS
+    local opts=(-b "$src" --packages "$packages" --disk-gb "$disk_gb")
+    (( upgrade )) && opts+=(--upgrade)
+    ip=$(cmd_new "$name" "${opts[@]}")
+    # cloud-init installs packages after sshd starts: wait for it to finish.
+    ssh "${SSH_OPTS[@]}" "$LAB_VM_USER@$ip" 'cloud-init status --wait >/dev/null; cloud-init status --long' >&2 \
+        || die "build-base: cloud-init failed on $name; left running for inspection"
+    for u in "${uploads[@]}"; do
+        say "upload $u"
+        scp -q -r "${SSH_OPTS[@]}" "$u" "$LAB_VM_USER@$ip:/tmp/" \
+            || die "build-base: upload of $u failed; $name left running"
+    done
+    if [[ -n "$prep" ]]; then
+        say "prep: $prep"
+        # shellcheck disable=SC2029  # PREP is meant to run on the guest as given
+        ssh "${SSH_OPTS[@]}" "$LAB_VM_USER@$ip" "$prep" >&2 \
+            || die "build-base: prep failed on $name; left running for inspection"
+    fi
+    cmd_seal "$name" $remove_user
+    hv Publish-BaseVhdx -VMName "$name" -Destination "$out" >&2
+    hv Remove-TestVM -Name "$name" -VMRoot "$LAB_VM_ROOT" >&2
+    say "base $out built in $((SECONDS - t0))s"
+}
+
+main() {
+    local cmd="${1:-}"; shift || true
+    case "$cmd" in
+        new) cmd_new "$@" ;;
+        fetch-debian) cmd_fetch_debian "$@" ;;
+        rm) need LAB_VM_ROOT; (( $# )) || die "rm: NAME..."
+            local names; names=$(IFS=,; echo "$*")
+            hv Remove-TestVM -Name "$names" -VMRoot "$LAB_VM_ROOT" ;;
+        ip) local ip; ip=$(vm_ip_once "${1:?ip: NAME}"); [[ -n "$ip" ]] || die "no IP for $1"; echo "$ip" ;;
+        ssh) local n="${1:?ssh: NAME}"; shift; local ip; ip=$(vm_ip_once "$n")
+             [[ -n "$ip" ]] || die "no IP for $n"
+             exec ssh "${SSH_OPTS[@]/BatchMode=yes/BatchMode=no}" "$LAB_VM_USER@$ip" "$@" ;;
+        seal) cmd_seal "$@" ;;
+        seed) local n="${1:?seed: NAME}" pk="" up=0; shift
+            while (( $# )); do case "$1" in
+                --packages) pk="$2"; shift ;; --upgrade) up=1 ;; *) die "seed: unknown $1" ;;
+            esac; shift; done
+            make_seed "$n" "$pk" "$up" ;;
+        publish) hv Publish-BaseVhdx -VMName "${1:?publish: NAME}" -Destination "${2:?publish: OUT}" ;;
+        build-base) need LAB_VM_ROOT; need LAB_SWITCH; cmd_build_base "$@" ;;
+        register) local dir="${1:?register: DIR}"; shift; local a=(-Path "$dir")
+            while (( $# )); do case "$1" in
+                --start) a+=(-Start) ;; --disposable) a+=(-Disposable) ;;
+                --switch) a+=(-SwitchName "$2"); shift ;; *) die "register: unknown $1" ;;
+            esac; shift; done
+            hv Register-TestVM "${a[@]}" ;;
+        -h|--help|help|"") usage ;;
+        *) die "unknown command $cmd (lab-vm --help)" ;;
+    esac
+}
+
+main "$@"
