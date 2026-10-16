@@ -10,10 +10,15 @@
 #   lab-vm rm NAME...              turn off and delete (only VMs lab-vm made)
 #   lab-vm ip NAME                 print NAME's lab IP
 #   lab-vm ssh NAME [CMD...]       ssh to NAME as LAB_VM_USER
-#   lab-vm seal NAME               generalize NAME in the guest and power it off
+#   lab-vm seal NAME [--remove-user]
+#                                  generalize NAME in the guest and power it off;
+#                                  --remove-user also deletes LAB_VM_USER, so a
+#                                  base to ship carries no lab login
 #   lab-vm publish NAME OUT.vhdx   write sealed, powered-off NAME as a base
 #   lab-vm build-base -s SRC -o OUT.vhdx [--prep CMD] [--packages ...] [--upgrade]
-#                     [--disk-gb N]
+#                     [--disk-gb N] [--upload PATH]... [--remove-user]
+#                                  --upload copies PATH to the build VM's /tmp
+#                                  before --prep runs
 #                                  new from SRC, prep, seal, publish, remove
 #   lab-vm seed NAME [--packages ...] [--upgrade]
 #                                  only write NAME's seed ISO, print its path
@@ -200,11 +205,18 @@ cmd_new() {
 }
 
 cmd_seal() {
-    local name="${1:?seal: NAME}" ip t0
+    local name="${1:?seal: NAME}" remove_user="${2:-}" ip t0 script="$SEAL_SCRIPT"
+    [[ -z "$remove_user" || "$remove_user" == --remove-user ]] || die "seal: unknown option $remove_user"
     ip=$(vm_ip_once "$name"); [[ -n "$ip" ]] || die "seal: no IP for $name"
-    say "sealing $name ($ip)"
+    if [[ -n "$remove_user" ]]; then
+        # Before the poweroff line. userdel -f works while the session is open.
+        script="userdel -f -r '$LAB_VM_USER' 2>/dev/null || true
+rm -f /etc/sudoers.d/90-cloud-init-users
+$script"
+    fi
+    say "sealing $name ($ip)${remove_user:+, removing user $LAB_VM_USER}"
     # The guest powers off at the end, so the ssh session may drop.
-    ssh "${SSH_OPTS[@]}" "$LAB_VM_USER@$ip" 'sudo sh -s' <<<"$SEAL_SCRIPT" || true
+    ssh "${SSH_OPTS[@]}" "$LAB_VM_USER@$ip" 'sudo sh -s' <<<"$script" || true
     t0=$SECONDS
     until hv Get-TestVMInfo -Name "$name" | grep -qx 'state=Off'; do
         (( SECONDS - t0 < LAB_WAIT )) || die "seal: $name did not power off"
@@ -238,9 +250,13 @@ cmd_fetch_debian() {
 }
 
 cmd_build_base() {
-    local src="" out="" prep="" packages="" upgrade=0 disk_gb=0 name ip
+    local src="" out="" prep="" packages="" upgrade=0 disk_gb=0 remove_user="" name ip u
+    local uploads=()
     while (( $# )); do
         case "$1" in
+            --upload) [[ -e "$2" ]] || die "build-base: --upload $2: no such file"
+                      uploads+=("$2"); shift 2 ;;
+            --remove-user) remove_user=--remove-user; shift ;;
             --disk-gb) disk_gb="$2"; shift 2 ;;
             -s|--source) src="$2"; shift 2 ;;
             -o|--out) out="$2"; shift 2 ;;
@@ -259,13 +275,18 @@ cmd_build_base() {
     # cloud-init installs packages after sshd starts: wait for it to finish.
     ssh "${SSH_OPTS[@]}" "$LAB_VM_USER@$ip" 'cloud-init status --wait >/dev/null; cloud-init status --long' >&2 \
         || die "build-base: cloud-init failed on $name; left running for inspection"
+    for u in "${uploads[@]}"; do
+        say "upload $u"
+        scp -q -r "${SSH_OPTS[@]}" "$u" "$LAB_VM_USER@$ip:/tmp/" \
+            || die "build-base: upload of $u failed; $name left running"
+    done
     if [[ -n "$prep" ]]; then
         say "prep: $prep"
         # shellcheck disable=SC2029  # PREP is meant to run on the guest as given
         ssh "${SSH_OPTS[@]}" "$LAB_VM_USER@$ip" "$prep" >&2 \
             || die "build-base: prep failed on $name; left running for inspection"
     fi
-    cmd_seal "$name"
+    cmd_seal "$name" $remove_user
     hv Publish-BaseVhdx -VMName "$name" -Destination "$out" >&2
     hv Remove-TestVM -Name "$name" -VMRoot "$LAB_VM_ROOT" >&2
     say "base $out built in $((SECONDS - t0))s"
