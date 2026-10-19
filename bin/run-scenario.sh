@@ -60,6 +60,8 @@ Flags:
 
 Required environment for SSH VM scenarios:
   LAB_HV_HOST, LAB_HV_USER, LAB_VM_IP, LAB_VM_USER
+  LAB_HV_HOST=local: the Hyper-V host is this machine (WSL2 on it);
+  LAB_HV_USER is then unused and the VM is reached without -J
 
 Optional environment:
   LAB_RESULTS_DIR, LAB_VM_NAME, LAB_GOLDEN_CHECKPOINT
@@ -91,31 +93,48 @@ done
 [[ -n "$SCENARIO_FILE" ]] || { usage >&2; exit 2; }
 [[ -f "$SCENARIO_FILE" ]] || { echo "Scenario not found: $SCENARIO_FILE" >&2; exit 2; }
 
+# LAB_HV_HOST=local: this workstation is the Hyper-V host (WSL2 on it), as
+# for lab-vm's LAB_HYPERV=local. Host commands go to powershell.exe here and
+# the VM is reached directly, without jumping through the host.
+hv_local() { [[ "${LAB_HV_HOST:-}" == local ]]; }
+
+# -J through the Hyper-V host, or nothing when it is local.
+vm_jump() {
+    : "${LAB_HV_HOST:?LAB_HV_HOST required}"
+    hv_local && return 0
+    : "${LAB_HV_USER:?LAB_HV_USER required}"
+    printf '%s\n' -J "${LAB_HV_USER}@${LAB_HV_HOST}"
+}
+
 ssh_host() {
     : "${LAB_HV_HOST:?LAB_HV_HOST required}"
+    if hv_local; then
+        command -v powershell.exe >/dev/null 2>&1 \
+            || { echo "LAB_HV_HOST=local needs WSL2 on the Hyper-V host (no powershell.exe)" >&2; return 1; }
+        powershell.exe -NoProfile -NonInteractive -Command "$*" | tr -d '\r'
+        return "${PIPESTATUS[0]}"
+    fi
     : "${LAB_HV_USER:?LAB_HV_USER required}"
     ssh "${LAB_HV_USER}@${LAB_HV_HOST}" "$@"
 }
 
 ssh_vm() {
-    : "${LAB_HV_HOST:?LAB_HV_HOST required}"
-    : "${LAB_HV_USER:?LAB_HV_USER required}"
     : "${LAB_VM_IP:?LAB_VM_IP required}"
     : "${LAB_VM_USER:?LAB_VM_USER required}"
+    local jump; mapfile -t jump < <(vm_jump)
     ssh -o LogLevel=ERROR \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -J "${LAB_HV_USER}@${LAB_HV_HOST}" \
+        "${jump[@]}" \
         "${LAB_VM_USER}@${LAB_VM_IP}" "$@"
 }
 
 scp_to_vm() {
-    : "${LAB_HV_HOST:?LAB_HV_HOST required}"
-    : "${LAB_HV_USER:?LAB_HV_USER required}"
     : "${LAB_VM_IP:?LAB_VM_IP required}"
     : "${LAB_VM_USER:?LAB_VM_USER required}"
+    local jump; mapfile -t jump < <(vm_jump)
     scp -o LogLevel=ERROR \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -J "${LAB_HV_USER}@${LAB_HV_HOST}" \
+        "${jump[@]}" \
         "$@" "${LAB_VM_USER}@${LAB_VM_IP}:${LAB_REMOTE_PUSH_DIR}/"
 }
 
@@ -183,10 +202,11 @@ if [[ $RESET -eq 1 ]]; then
 
     say "wait for ${LAB_VM_IP} SSH"
     ssh_up=0
+    mapfile -t jump < <(vm_jump)
     for _ in $(seq 1 60); do
         if ssh -o ConnectTimeout=3 -o BatchMode=yes -o LogLevel=ERROR \
                -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-               -J "${LAB_HV_USER}@${LAB_HV_HOST}" "${LAB_VM_USER}@${LAB_VM_IP}" true 2>/dev/null; then
+               "${jump[@]}" "${LAB_VM_USER}@${LAB_VM_IP}" true 2>/dev/null; then
             ssh_up=1
             break
         fi
