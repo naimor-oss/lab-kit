@@ -19,6 +19,10 @@
     requires before it deletes anything. Automatic checkpoints are off.
     Prints one line: "VM <name> mac=<MAC> disk=<mode> seconds=<n>".
 
+    Refuses to start when the volume holding -VMRoot has less than -MinFreeGB
+    free: when that volume fills, Hyper-V pauses every VM on it
+    (PausedCritical) and some end up Off, with no other warning.
+
     Needs Hyper-V rights only (elevated, or a member of Hyper-V Administrators).
 
 .EXAMPLE
@@ -37,6 +41,7 @@ param(
     [int]   $DiskGB = 0,          # grow the VM's disk to this size; 0 = keep the base size
     [string]$MacAddress = '',     # static MAC (any separators); default dynamic
     [ValidateSet('Auto', 'Copy', 'Differencing')] [string]$DiskMode = 'Auto',
+    [int]   $MinFreeGB = 20,      # refuse below this much free space on VMRoot's volume; 0 = no check
     [switch]$NoStart
 )
 $ErrorActionPreference = 'Stop'
@@ -46,6 +51,12 @@ if (Get-VM | Where-Object Name -eq $Name) { throw "VM '$Name' already exists" }
 if (-not (Test-Path -LiteralPath $BaseVhdx)) { throw "base VHDX not found: $BaseVhdx" }
 if ($SeedIso -and -not (Test-Path -LiteralPath $SeedIso)) { throw "seed ISO not found: $SeedIso" }
 Get-VMSwitch -Name $SwitchName | Out-Null
+if ($MinFreeGB -gt 0) {
+    $freeGB = [math]::Floor((Get-Volume -FilePath $VMRoot).SizeRemaining / 1GB)
+    if ($freeGB -lt $MinFreeGB) {
+        throw "only $freeGB GB free on the volume holding $VMRoot (minimum $MinFreeGB): a full volume pauses every VM on it; free space or move VMs first, or pass -MinFreeGB"
+    }
+}
 
 $dir = Join-Path $VMRoot $Name
 if (Test-Path -LiteralPath $dir) { throw "folder already exists: $dir" }

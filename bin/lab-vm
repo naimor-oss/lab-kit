@@ -37,6 +37,9 @@
 #   LAB_VM_ROOT      host path for VM folders            (required)
 #   LAB_SWITCH       Hyper-V switch for the VMs           (required)
 #   LAB_BASE         default base VHDX (host path) for "new"
+#   LAB_MIN_FREE_GB  "new" refuses below this much free space on LAB_VM_ROOT's
+#                    volume (default 20; 0 = no check): a full volume pauses
+#                    every VM on it
 #   LAB_SEED_DIR     where seed ISOs are written: a local path the host also
 #                    sees (default: $(lab_iso_dir)/seeds)
 #   LAB_ROUTER_SSH   USER@ROUTER whose dnsmasq leases give a VM's IP
@@ -220,7 +223,8 @@ cmd_new() {
     seed=$(make_seed "$name" "$packages" "$upgrade")
     hv New-TestVM -Name "$name" -BaseVhdx "$base" -VMRoot "$LAB_VM_ROOT" \
         -SwitchName "$LAB_SWITCH" -SeedIso "$(host_path "$seed")" -DiskGB "$disk_gb" \
-        -MemoryMB "$memory_mb" -VCpu "$cpus" >&2
+        -MemoryMB "$memory_mb" -VCpu "$cpus" -MinFreeGB "${LAB_MIN_FREE_GB:-20}" >&2 \
+        || { rm -f "$seed"; die "new: $name not created"; }
     rm -f "$seed"
     (( wait )) || return 0
     ip=$(wait_ssh "$name")
